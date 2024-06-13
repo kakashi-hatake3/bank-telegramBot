@@ -9,6 +9,8 @@ import sqlite3
 import threading
 from dotenv import load_dotenv
 
+from site import keep_alive
+
 load_dotenv()
 
 
@@ -386,4 +388,5 @@ def update_loans():
 
 loan_thread = threading.Thread(target=update_loans)
 loan_thread.start()
+keep_alive()
 bot.polling()
