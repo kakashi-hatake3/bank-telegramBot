@@ -57,7 +57,7 @@ def create_tables():
 
 
 # Создание таблиц при запуске бота
-create_tables()
+# create_tables()
 
 
 # Обработчик команды /start
