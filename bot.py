@@ -8,11 +8,9 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import sqlite3
 import threading
 from dotenv import load_dotenv
-from keep_alive import keep_alive
 
 
 load_dotenv()
-keep_alive()
 
 # Замените 'YOUR_BOT_TOKEN' на токен вашего бота
 bot = telebot.TeleBot(os.getenv('BOT_TOKEN'))
