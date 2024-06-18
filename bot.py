@@ -8,12 +8,15 @@ from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 import sqlite3
 import threading
 from dotenv import load_dotenv
-
+import logging
 
 load_dotenv()
 
 # Замените 'YOUR_BOT_TOKEN' на токен вашего бота
 bot = telebot.TeleBot(os.getenv('BOT_TOKEN'))
+
+# Enable logging to help with debugging
+logging.basicConfig(level=logging.DEBUG)
 
 
 # Функция для создания соединения с базой данных
@@ -91,6 +94,67 @@ def show_loan_options(message):
     bot.reply_to(message, "Выберите действие:", reply_markup=markup)
 
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('repay_'))
+def handle_repay_loan(call):
+    logging.debug(f"Received callback data: {call.data}")
+    loan_id = int(call.data.split('_')[1])
+    conn, cursor = create_connection()
+    cursor.execute("SELECT user_id, amount, interest_rate FROM loans WHERE loan_id = ? AND status = 'active'",
+                   (loan_id,))
+    loan = cursor.fetchone()
+
+    bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
+
+    if loan:
+        user_id, amount, interest_rate = loan
+        cursor.execute("SELECT balance FROM accounts WHERE user_id = ?", (user_id,))
+        user_balance = cursor.fetchone()[0]
+        total_amount = amount
+        if user_balance >= total_amount:
+            cursor.execute("UPDATE accounts SET balance = balance - ? WHERE user_id = ?", (total_amount, user_id))
+            cursor.execute("UPDATE accounts SET balance = balance + ? WHERE user_id = 0", (total_amount,))
+            cursor.execute("UPDATE loans SET status = 'closed' WHERE loan_id = ?", (loan_id,))
+            conn.commit()
+            bot.send_message(chat_id=call.message.chat.id,
+                             text=f"Кредит на сумму {total_amount:.2f} монет успешно погашен.")
+        else:
+            bot.send_message(chat_id=call.message.chat.id, text="У вас недостаточно средств для погашения кредита.")
+    else:
+        bot.send_message(chat_id=call.message.chat.id, text="Кредит не найден.")
+    conn.close()
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('loan_'))
+def handle_loan(call):
+    logging.debug(f"Received callback data: {call.data}")
+    amount = int(call.data.split('_')[1])
+    user_id = call.from_user.id
+    conn, cursor = create_connection()
+
+    cursor.execute("SELECT balance FROM accounts WHERE user_id = 0")
+    bank_balance = cursor.fetchone()[0]
+
+    cursor.execute("SELECT * FROM loans WHERE user_id = ? AND status = 'active'", (user_id,))
+    active_loan = cursor.fetchone()
+
+    bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
+
+    if active_loan:
+        bot.send_message(chat_id=call.message.chat.id,
+                         text="Вы не можете взять новый кредит, пока не погасите текущий.")
+    elif bank_balance >= amount:
+        cursor.execute("UPDATE accounts SET balance = balance - ? WHERE user_id = 0", (amount,))
+        cursor.execute("UPDATE accounts SET balance = balance + ? WHERE user_id = ?", (amount, user_id))
+        cursor.execute(
+            "INSERT INTO loans (user_id, amount, start_date, end_date, interest_rate, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (user_id, amount, datetime.now().strftime("%Y-%m-%d"), '', 0.25, 'active'))
+        conn.commit()
+        bot.send_message(chat_id=call.message.chat.id, text=f"Кредит на сумму {amount} монет успешно выдан.")
+    else:
+        bot.send_message(chat_id=call.message.chat.id, text="В банке недостаточно средств для выдачи кредита.")
+    conn.close()
+
+
 @bot.message_handler(commands=['balance'])
 def show_balance(message):
     conn, cursor = create_connection()
@@ -128,6 +192,41 @@ def show_buy_services(message):
     bot.reply_to(message, "Выберите услугу для покупки:", reply_markup=markup)
 
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith('buy_'))
+def handle_buy_service(call):
+    logging.debug(f"Received callback data: {call.data}")
+    service_id = int(call.data.split('_')[1])
+    buyer_id = call.from_user.id
+
+    conn, cursor = create_connection()
+    cursor.execute("SELECT service_name, price FROM services WHERE service_id = ?", (service_id,))
+    service = cursor.fetchone()
+    cursor.execute("SELECT balance FROM accounts WHERE user_id = ?", (buyer_id,))
+    buyer_balance = cursor.fetchone()[0]
+    bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
+
+    if service:
+        service_name, price = service
+
+
+        if buyer_balance >= price:
+            if service_name.startswith("Экспресс"):
+                cursor.execute("UPDATE accounts SET balance = balance - ? WHERE user_id = ?", (price, buyer_id))
+                cursor.execute("UPDATE accounts SET balance = balance + ? WHERE user_id = 0", (price,))
+                bot.send_message(chat_id=call.message.chat.id, text=f"Вы выбрали услугу '{service_name}' стоимостью {price} монет. Все средства переведены в банк.")
+            else:
+                logging.debug(f"Price: {price}")
+                cursor.execute("UPDATE accounts SET balance = balance + ? WHERE user_id = ?", (price * 0.25 - price * 0.75, 0))
+                cursor.execute("UPDATE accounts SET balance = balance - ? WHERE user_id = ?", (price + price * 0.75, buyer_id))
+                cursor.execute("UPDATE accounts SET balance = balance + ? WHERE user_id = (SELECT user_id FROM services WHERE service_id = ?)", (price * 0.75, service_id))
+                bot.send_message(chat_id=call.message.chat.id, text=f"Вы выбрали услугу '{service_name}' стоимостью {price} монет. 75% средств переведены исполнителю, 25% - в банк.")
+            conn.commit()
+        else:
+            bot.send_message(chat_id=call.message.chat.id, text="У вас недостаточно средств для покупки этой услуги.")
+    else:
+        bot.send_message(chat_id=call.message.chat.id, text="Ошибка: услуга не найдена.")
+    conn.close()
+
 # Обработчик команды /sell
 @bot.message_handler(commands=['sell'])
 def show_sell_services(message):
@@ -140,6 +239,62 @@ def show_sell_services(message):
         service_id, service_name, price = service
         markup.add(InlineKeyboardButton(f"{service_name} - {price}", callback_data=f"sell_{service_id}"))
     bot.reply_to(message, "Выберите услугу, которую можете оказать:", reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('sell_'))
+def handle_sell_service(call):
+    logging.debug(f"Received callback data: {call.data}")
+    service_id = int(call.data.split('_')[1])
+    conn, cursor = create_connection()
+    cursor.execute("SELECT service_name, price FROM services WHERE service_id = ?", (service_id,))
+    service = cursor.fetchone()
+    conn.close()
+    bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
+    if service:
+        service_name, price = service
+        bot.send_message(chat_id=call.message.chat.id,
+                         text=f"Вы выбрали услугу '{service_name}' стоимостью {price} монет. Пожалуйста, отправьте фото выполненной работы.")
+        bot.register_next_step_handler_by_chat_id(call.message.chat.id, receive_photo, service_id, service_name, price,
+                                                  call.from_user.id)
+
+    else:
+        bot.send_message(chat_id=call.message.chat.id, text="Ошибка: услуга не найдена.")
+
+
+def receive_photo(message, service_id, service_name, price, seller_id):
+    if message.content_type == 'photo':
+        photo_id = message.photo[-1].file_id
+        conn, cursor = create_connection()
+        cursor.execute("INSERT INTO completed_services (user_id, service_name, price, photo_id) VALUES (?, ?, ?, ?)",
+                       (seller_id, service_name, price, photo_id))
+        conn.commit()
+        conn.close()
+        bot.send_message(chat_id=message.chat.id, text="Фото получено. Ожидайте подтверждения.")
+        send_confirmation_request(message.chat.id, service_id, seller_id, price)
+    else:
+        bot.send_message(chat_id=message.chat.id, text="Пожалуйста, отправьте фото выполненной работы.")
+
+
+def send_confirmation_request(chat_id, service_id, seller_id, price):
+    markup = InlineKeyboardMarkup()
+    markup.add(InlineKeyboardButton("Подтвердить выполнение", callback_data=f"confirm_{service_id}_{seller_id}_{price}"))
+    bot.send_message(chat_id=chat_id, text="Подтвердите выполнение задачи:", reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_'))
+def confirm_task(call):
+    service_id, task_user_id, price = call.data.split('_')[1], call.data.split('_')[2], call.data.split('_')[3]
+    if call.from_user.id != int(task_user_id):
+        conn, cursor = create_connection()
+        cursor.execute("UPDATE accounts SET balance = balance - ? WHERE user_id = 0", (price,))
+        cursor.execute("UPDATE accounts SET balance = balance + ? WHERE user_id = ?", (price, task_user_id))
+        cursor.execute("DELETE FROM completed_services WHERE service_id = ?", (service_id,))
+        conn.commit()
+        conn.close()
+        bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
+        bot.send_message(chat_id=call.message.chat.id, text="Пользователь успешно закончил дело.")
+    else:
+        bot.answer_callback_query(call.id, "Вы не можете подтвердить выполнение своей задачи.")
 
 
 @bot.message_handler(commands=['debts'])
@@ -184,7 +339,6 @@ def show_debts(message):
     bot.reply_to(message, debts_text)
 
 
-# Обработчик команды /send
 @bot.message_handler(commands=['send'])
 def send_money(message):
     markup = InlineKeyboardMarkup()
@@ -236,7 +390,6 @@ def process_amount(message, recipient_id):
         bot.send_message(chat_id=message.chat.id, text="Пожалуйста, введите корректную сумму.")
 
 
-# Обработчик команды /add_service
 @bot.message_handler(commands=['add_service'])
 def add_service(message):
     markup = InlineKeyboardMarkup()
@@ -326,32 +479,6 @@ def show_user_tasks(call):
         bot.send_message(chat_id=call.message.chat.id, text="У пользователя нет дел.")
 
 
-@bot.callback_query_handler(func=lambda call: call.data.startswith('task_'))
-def confirm_task_completion(call):
-    service_id, task_user_id = call.data.split('_')[1], call.data.split('_')[2]
-    if call.from_user.id == int(task_user_id):
-        markup = InlineKeyboardMarkup()
-        markup.add(InlineKeyboardButton("Подтвердить выполнение", callback_data=f"confirm_{service_id}_{task_user_id}"))
-        bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
-        bot.send_message(chat_id=call.message.chat.id, text="Подтвердите выполнение задачи:", reply_markup=markup)
-    else:
-        bot.answer_callback_query(call.id, "Вы не можете подтвердить выполнение задачи другого пользователя.")
-
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_'))
-def confirm_task(call):
-    service_id, task_user_id = call.data.split('_')[1], call.data.split('_')[2]
-    if call.from_user.id != int(task_user_id):
-        conn, cursor = create_connection()
-        cursor.execute("DELETE FROM completed_services WHERE service_id = ?", (service_id,))
-        conn.commit()
-        conn.close()
-        bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
-        bot.send_message(chat_id=call.message.chat.id, text=f"Пользователь успешно закончил дело.")
-    else:
-        bot.answer_callback_query(call.id, "Вы не можете подтвердить выполнение своей задачи.")
-
-
 def update_loans():
     while True:
         conn, cursor = create_connection()
@@ -366,7 +493,7 @@ def update_loans():
             if amount <= 12:
                 if elapsed_time > timedelta(hours=24):
                     new_interest_rate = interest_rate + 0.25 * (
-                                (elapsed_time - timedelta(hours=24)) // timedelta(hours=24) + 1)
+                            (elapsed_time - timedelta(hours=24)) // timedelta(hours=24) + 1)
                     cursor.execute("UPDATE loans SET status = 'closed' WHERE loan_id = ?", (loan_id,))
                     cursor.execute(
                         "INSERT INTO loans (user_id, amount, start_date, interest_rate, status) VALUES (?, ?, ?, ?, 'active')",
@@ -374,16 +501,17 @@ def update_loans():
             else:
                 if elapsed_time > timedelta(hours=48):
                     new_interest_rate = interest_rate + 0.25 * (
-                                (elapsed_time - timedelta(hours=48)) // timedelta(hours=72) + 1)
+                            (elapsed_time - timedelta(hours=48)) // timedelta(hours=72) + 1)
                     cursor.execute("UPDATE loans SET status = 'closed' WHERE loan_id = ?", (loan_id,))
                     cursor.execute(
                         "INSERT INTO loans (user_id, amount, start_date, interest_rate, status) VALUES (?, ?, ?, ?, 'active')",
                         (user_id, amount, now.strftime("%Y-%m-%d"), new_interest_rate))
         conn.commit()
         conn.close()
-        time.sleep(60)  # Проверка каждую минуту
+        time.sleep(60)
 
 
 loan_thread = threading.Thread(target=update_loans)
 loan_thread.start()
+
 bot.polling()
