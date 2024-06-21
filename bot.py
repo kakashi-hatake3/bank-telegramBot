@@ -70,10 +70,94 @@ create_tables()
 def send_welcome(message):
     conn, cursor = create_connection()
     user_id = message.from_user.id
+    cursor.execute("INSERT OR IGNORE INTO accounts (user_id, balance) VALUES (0, 0)")  # Создание банка
     cursor.execute("INSERT OR IGNORE INTO accounts (user_id, balance) VALUES (?, 0)", (user_id,))
     conn.commit()
     conn.close()
     bot.reply_to(message, "Добро пожаловать в бот для покупки и оказания услуг!")
+
+
+@bot.message_handler(commands=['change_balance'])
+def change_balance(message):
+    markup = InlineKeyboardMarkup()
+    conn, cursor = create_connection()
+    cursor.execute("SELECT user_id FROM accounts")
+    users = cursor.fetchall()
+    conn.close()
+    for user in users:
+        user_id = user[0]
+        try:
+            user_info = bot.get_chat_member(chat_id=message.chat.id, user_id=user_id).user
+            user_name = user_info.first_name
+            if user_info.last_name:
+                user_name += f" {user_info.last_name}"
+            markup.add(InlineKeyboardButton(user_name, callback_data=f"select_{user_id}"))
+        except ApiTelegramException:
+            markup.add(InlineKeyboardButton(f"Пользователь {user_id}", callback_data=f"select_{user_id}"))
+    bot.reply_to(message, "Выберите пользователя для изменения баланса:", reply_markup=markup)
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('select_'))
+def select_user(call):
+    target_user_id = int(call.data.split('_')[1])
+    clicking_user_id = call.from_user.id
+    if target_user_id != 0:
+        user_info = bot.get_chat_member(chat_id=call.message.chat.id, user_id=target_user_id).user
+        user_name = user_info.first_name
+        if user_info.last_name:
+            user_name += f" {user_info.last_name}"
+    else:
+        user_name = 'Банк'
+    bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
+    bot.send_message(chat_id=call.message.chat.id, text=f"Введите сумму для изменения баланса пользователя {user_name}:")
+    bot.register_next_step_handler(call.message, process_balance_change, target_user_id, user_name, clicking_user_id)
+
+
+def process_balance_change(message, target_user_id, user_name, clicking_user_id):
+    try:
+        amount = float(message.text)
+        markup = InlineKeyboardMarkup()
+        markup.add(InlineKeyboardButton("Подтвердить", callback_data=f"confirm_balance_{target_user_id}_{amount}_{clicking_user_id}"))
+        markup.add(InlineKeyboardButton("Отменить", callback_data="cancel"))
+        bot.send_message(chat_id=message.chat.id, text=f"Подтвердите изменение баланса на {amount} монет для пользователя {user_name}:", reply_markup=markup)
+    except ValueError:
+        bot.send_message(chat_id=message.chat.id, text="Пожалуйста, введите корректную сумму.")
+
+
+@bot.callback_query_handler(func=lambda call: call.data.startswith('confirm_balance_'))
+def handle_confirm_balance(call):
+    data = call.data.split('_')
+    target_user_id = int(data[2])
+    amount = float(data[3])
+    clicking_user_id = int(data[4])
+    logging.debug(f"clicking_id: {clicking_user_id}, target_id: {target_user_id}, call_from: {call.from_user.id}")
+
+    if call.from_user.id == clicking_user_id:
+
+        bot.answer_callback_query(call.id, "Вы не можете подтвердить изменение собственного баланса.")
+        return
+
+    conn, cursor = create_connection()
+    cursor.execute("UPDATE accounts SET balance = ? WHERE user_id = ?", (amount, target_user_id))
+    conn.commit()
+    conn.close()
+
+    if target_user_id != 0:
+        user_info = bot.get_chat_member(chat_id=call.message.chat.id, user_id=target_user_id).user
+        user_name = user_info.first_name
+        if user_info.last_name:
+            user_name += f" {user_info.last_name}"
+    else:
+        user_name = 'Банк'
+
+    bot.send_message(chat_id=call.message.chat.id, text=f"Баланс пользователя {user_name} успешно изменен на {amount} монет.")
+    bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "cancel")
+def handle_cancel(call):
+    bot.send_message(chat_id=call.message.chat.id, text="Операция изменения баланса отменена.")
+    bot.delete_message(chat_id=call.message.chat.id, message_id=call.message.message_id)
 
 
 @bot.message_handler(commands=['loan'])
