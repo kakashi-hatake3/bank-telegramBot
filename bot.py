@@ -357,6 +357,8 @@ def receive_photo(message, service_id, service_name, price, type, seller_id):
         conn.commit()
         conn.close()
         bot.send_message(chat_id=message.chat.id, text="Фото получено. Ожидайте подтверждения.")
+        logging.debug(f"report: {service_id, service_name, price, type, seller_id}")
+
         send_confirmation_request(message.chat.id, service_id, seller_id, price, service_name, type)
     else:
         bot.send_message(chat_id=message.chat.id, text="Пожалуйста, отправьте фото выполненной работы.")
@@ -682,7 +684,8 @@ def update_loans():
         time.sleep(60)
 
 
-loan_thread = threading.Thread(target=update_loans)
-loan_thread.start()
+while True:
+    loan_thread = threading.Thread(target=update_loans)
+    loan_thread.start()
 
-bot.polling()
+    bot.polling()
