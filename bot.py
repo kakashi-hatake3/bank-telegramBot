@@ -684,8 +684,7 @@ def update_loans():
         time.sleep(60)
 
 
-while True:
-    loan_thread = threading.Thread(target=update_loans)
-    loan_thread.start()
+loan_thread = threading.Thread(target=update_loans)
+loan_thread.start()
 
-    bot.polling()
+bot.polling()
