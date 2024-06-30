@@ -542,12 +542,16 @@ def select_category(call):
 
 def process_service(message, category):
     try:
-        text = message.text
-        service_name, price = text.split(',')
+        message_text = message.text
+        service_name, price = message_text.split(',')
         price = float(price.strip())
         session = create_connection()
-        session.execute(text("INSERT INTO services (service_name, price, type) VALUES (:service_name, :price, :type)"),
-                        {'service_name': service_name.strip(), 'price': price, 'type': category})
+        session.execute(
+            text(
+                "INSERT INTO services (service_name, price, type) VALUES (:service_name, :price, :type)"
+            ),
+            {'service_name': service_name.strip(), 'price': price, 'type': category}
+        )
         session.commit()
         session.close()
         bot.send_message(chat_id=message.chat.id,
