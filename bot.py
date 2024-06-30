@@ -682,7 +682,7 @@ def show_transactions(message):
             a.service_name,
             a.type,
             a.price,
-            strftime('%Y-%m-%d %H:%M', a.end_date) as closed_date
+            TO_CHAR(a.end_date::timestamp, 'YYYY-MM-DD HH24:MI') AS closed_date
         FROM completed_services a
         JOIN accounts b ON a.user_id = b.user_id
         WHERE a.status = 'closed'
