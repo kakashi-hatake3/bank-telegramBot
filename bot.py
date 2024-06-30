@@ -1,19 +1,13 @@
-import os
 import time
 from datetime import datetime, timedelta
 from sqlalchemy import text
-import pymysql
 import telebot
 from telebot.apihelper import ApiTelegramException
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import sqlite3
 import threading
-from dotenv import load_dotenv
 import logging
 from config import *
 from database import get_session, close_session
-
-load_dotenv()
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
