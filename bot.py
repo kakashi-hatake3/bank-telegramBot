@@ -762,4 +762,4 @@ def update_loans():
 loan_thread = threading.Thread(target=update_loans)
 loan_thread.start()
 
-bot.polling()
+bot.infinity_polling()
